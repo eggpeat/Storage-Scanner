@@ -16,6 +16,7 @@ import csv
 import json
 import os
 import queue
+import signal
 import sys
 import threading
 
@@ -70,6 +71,11 @@ def _write_csv(node, out):
 
 def run_cli(argv):
     """Parse CLI arguments and run the scan. Returns a process exit code."""
+    # Piping to `head`/`less`/etc. closes stdout early; die quietly on
+    # SIGPIPE like a normal Unix tool instead of a BrokenPipeError traceback.
+    if hasattr(signal, "SIGPIPE"):  # Unix only; absent on Windows
+        signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+
     parser = build_arg_parser()
     args = parser.parse_args(argv)  # exits(2) itself on --help / bad usage
 

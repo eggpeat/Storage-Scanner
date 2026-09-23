@@ -1,6 +1,9 @@
 import csv
 import io
 import json
+import os
+import signal
+import subprocess
 import sys
 from pathlib import Path
 
@@ -86,3 +89,45 @@ def test_unwritable_output_path_returns_scan_error(tmp_path, capsys):
     assert code == EXIT_SCAN_ERROR
     captured = capsys.readouterr()
     assert "Could not write output file" in captured.err
+
+
+def test_entry_point_cli_works_without_tkinter(tmp_path):
+    # The documented headless mode must not require the GUI toolkit: block
+    # tkinter entirely, then run the real entry point as a subprocess.
+    (tmp_path / "a.txt").write_text("hello")
+    shim = (
+        "import sys, runpy; "
+        "sys.modules['tkinter'] = None; "
+        "sys.argv = ['Storage-Scanner.py', '--cli', %r]; "
+        "runpy.run_path(%r, run_name='__main__')"
+    ) % (str(tmp_path), str(ROOT / "Storage-Scanner.py"))
+    env = dict(os.environ, PYTHONPATH=str(ROOT))
+    proc = subprocess.run(
+        [sys.executable, "-c", shim],
+        capture_output=True, text=True, env=env, cwd=str(ROOT),
+    )
+    assert proc.returncode == 0, proc.stderr
+    data = json.loads(proc.stdout)
+    assert data["file_count"] == 1
+
+
+@pytest.mark.skipif(not hasattr(signal, "SIGPIPE"), reason="Unix-only")
+def test_early_closed_pipe_dies_quietly_without_traceback(tmp_path):
+    # `scan ... | head` must behave like a normal Unix tool (quiet SIGPIPE
+    # death), not a BrokenPipeError traceback. Needs enough output to
+    # overflow the pipe buffer after the reader exits.
+    for i in range(3000):
+        (tmp_path / f"f{i:05d}.txt").write_text("x")
+    env = dict(os.environ, PYTHONPATH=str(ROOT))
+    scan = subprocess.Popen(
+        [sys.executable, str(ROOT / "Storage-Scanner.py"), "--cli", str(tmp_path)],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=str(ROOT), env=env,
+    )
+    head = subprocess.Popen(
+        ["head", "-c", "100"], stdin=scan.stdout, stdout=subprocess.PIPE,
+    )
+    scan.stdout.close()  # let head own the read end so EPIPE can fire
+    head.communicate()
+    _, err = scan.communicate()
+    assert scan.returncode == -signal.SIGPIPE
+    assert b"Traceback" not in err
