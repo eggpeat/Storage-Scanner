@@ -2,7 +2,9 @@ import os
 import queue
 import sys
 import threading
+from io import StringIO
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -39,6 +41,117 @@ def _by_name(node):
 
 def _file(parent, name, size=0, **kw):
     return FileNode(parent, parent.add_file(name, size, **kw))
+
+
+def test_mount_boundaries_are_empty_leaves_but_can_be_scanned_directly(tmp_path, monkeypatch):
+    mounted = tmp_path / "mounted"
+    mounted.mkdir()
+    (mounted / "outside.bin").write_bytes(b"x" * 1000)
+    local = tmp_path / "local"
+    local.mkdir()
+    (local / "inside.bin").write_bytes(b"y" * 7)
+    root_device = tmp_path.stat().st_dev
+    real_stat, real_scandir = os.stat, os.scandir
+    visited = []
+
+    def device_stat(path, **kwargs):
+        info = real_stat(path, **kwargs)
+        if os.path.commonpath([str(mounted), os.fspath(path)]) == str(mounted):
+            values = {name: getattr(info, name) for name in dir(info) if name.startswith("st_")}
+            values["st_dev"] = root_device + 1
+            return SimpleNamespace(**values)
+        return info
+
+    class Entry:
+        def __init__(self, entry):
+            self.path, self.name = entry.path, entry.name
+            self.is_dir = entry.is_dir
+
+        def stat(self, **kwargs):
+            return device_stat(self.path, **kwargs)
+
+    class Listing:
+        def __init__(self, path):
+            visited.append(path)
+            self.listing = real_scandir(path)
+
+        def __enter__(self):
+            return (Entry(entry) for entry in self.listing)
+
+        def __exit__(self, *args):
+            self.listing.close()
+
+    monkeypatch.setattr(scanner.os, "stat", device_stat)
+    monkeypatch.setattr(scanner.os, "scandir", Listing)
+    monkeypatch.setattr(scanner, "_measure_alloc_size", lambda path, info: info.st_size)
+
+    root, messages = _run_scan_with_messages(tmp_path)
+    boundary = _by_name(root)["mounted"]
+    assert boundary.is_dir and not boundary.children
+    assert boundary.size == boundary.alloc_size == 0
+    assert not root.error
+    assert root.size == root.alloc_size == 7
+    assert root.file_count == 1
+    assert str(mounted) not in visited
+    snapshot = [payload for kind, payload in messages if kind == "walk"][-1]
+    assert snapshot.bytes == snapshot.alloc_bytes == 7
+    assert snapshot.files == 1 and snapshot.pending == 0
+
+    direct = _run_scan(mounted)
+    assert direct.size == 1000
+    assert direct.file_count == 1
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Linux mountinfo")
+@pytest.mark.parametrize("filesystem", ["proc", "sysfs", "devtmpfs", "devpts", "cgroup2"])
+def test_pseudo_filesystem_targets_are_not_scanned(tmp_path, monkeypatch, filesystem):
+    target = tmp_path / "kernel-view"
+    target.mkdir()
+    kernel_file = target / "kcore"
+    kernel_file.write_bytes(b"not stored file data")
+    device = target.stat().st_dev
+    mountinfo = (
+        f"24 1 {os.major(device)}:{os.minor(device)} / /arbitrary\\040mount rw shared:1"
+        f" - {filesystem} none rw\n"
+    )
+    monkeypatch.setattr(scanner, "open", lambda *args, **kw: StringIO(mountinfo), raising=False)
+
+    visited = []
+    real_scandir = os.scandir
+
+    def tracked_scandir(path):
+        visited.append(path)
+        return real_scandir(path)
+
+    monkeypatch.setattr(scanner.os, "scandir", tracked_scandir)
+    root = _run_scan(target)
+    assert root.is_dir and not root.children
+    assert root.size == root.alloc_size == root.file_count == 0
+    file_root = _run_scan(kernel_file)
+    assert not file_root.is_dir
+    assert file_root.size == file_root.alloc_size == 0
+    assert not visited
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Linux mountinfo")
+def test_mountinfo_filters_types_and_tolerates_unavailable_metadata(tmp_path, monkeypatch):
+    mountinfo = (
+        "24 1 0:42 / /renamed\\040proc rw shared:1 - proc none rw\n"
+        "25 1 8:1 / / rw - ext4 /dev/root rw\n"
+        "26 1 0:43 / /ram rw - tmpfs tmpfs rw\n"
+        "invalid mountinfo\n"
+        "27 1 bad / /bad rw - proc none rw\n"
+        "28 1 0:44 / /bad rw - \n"
+    )
+    monkeypatch.setattr(scanner, "open", lambda *args, **kw: StringIO(mountinfo), raising=False)
+    assert scanner._pseudo_filesystem_devices() == {os.makedev(0, 42)}
+
+    def unavailable(*args, **kwargs):
+        raise FileNotFoundError
+
+    monkeypatch.setattr(scanner, "open", unavailable)
+    (tmp_path / "regular.bin").write_bytes(b"123")
+    assert _run_scan(tmp_path).size == 3
 
 
 def test_hardlinks_are_not_double_counted(tmp_path):
