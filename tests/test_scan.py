@@ -160,6 +160,27 @@ def test_symlinked_directory_is_not_traversed(tmp_path):
     assert root.size == children["real"].size + link_node.size
 
 
+@pytest.mark.skipif(not hasattr(os, "symlink"), reason="symlinks not supported")
+def test_a_symlink_is_flagged_as_a_link(tmp_path):
+    """A symbolic link is a link on every platform, not only on Windows
+    (where it shows up as a reparse point). On POSIX it was recorded as an
+    ordinary file, so it could be reported as a duplicate copy of the file
+    it points at."""
+    target = tmp_path / "target.log"
+    target.write_bytes(b"y" * 50)
+    link = tmp_path / "link.log"
+    try:
+        os.symlink(target, link)
+    except (OSError, NotImplementedError):
+        pytest.skip("could not create a symlink in this environment")
+
+    root = _run_scan(tmp_path)
+    children = _by_name(root)
+
+    assert children["link.log"].is_link
+    assert not children["target.log"].is_link
+
+
 @pytest.mark.windows
 def test_symlinked_file_is_billed_its_own_allocation_not_its_targets(tmp_path):
     # GetCompressedFileSizeW follows a symbolic link, so a link next to a

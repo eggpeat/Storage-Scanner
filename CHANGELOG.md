@@ -54,6 +54,11 @@ before v1.04 (v1.0.0 to v1.0.3) aren't listed.
   the bin's record of each appears a few milliseconds late. They're now
   recorded as recycled. Looking each one up is also faster when the bin
   holds thousands of items.
+- On macOS and Linux, a symbolic link is now recognised as a link (it is
+  shown as one), and it is no longer reported as a duplicate copy of the
+  file it points at: a link's size is its own, but hashing it reads
+  through it, so a venv's `bin/python` and `bin/python3.12` came out as
+  identical copies of each other.
 
 ### Security
 

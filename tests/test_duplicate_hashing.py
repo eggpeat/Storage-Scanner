@@ -5,9 +5,13 @@ Files up to three chunks are fully covered by those windows and must match
 byte-exactly; larger files are a sampled match by design.
 """
 
+import os
+import queue
 import sys
 import threading
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -15,6 +19,7 @@ sys.path.insert(0, str(ROOT))
 from storage_scanner import duplicate_finder
 from storage_scanner.cleanup_recommendations import is_sampled_duplicate
 from storage_scanner.models import Node
+from storage_scanner.scanner import scan
 from storage_scanner.settings import DUPLICATE_HASH_CHUNK_BYTES
 from storage_scanner.ui.duplicate_window import DuplicatesMixin
 
@@ -123,3 +128,28 @@ def test_large_files_differing_only_in_the_middle_chunk_are_not_grouped(tmp_path
     app = _make_app(tmp_path, [("a.bin", original), ("b.bin", middle_changed)])
 
     assert _groups(app) == []
+
+
+@pytest.mark.skipif(not hasattr(os, "symlink"), reason="symlinks not supported")
+def test_symlinks_are_not_grouped_as_duplicates_of_their_target(tmp_path):
+    """A symlink's recorded size is its own (the length of the target
+    path), but hashing it reads through it to the target -- so a link and
+    the file it points at came out as identical copies of each other.
+
+    The target's content is as long as the target's name, so the link's
+    own size (the name's length) matches it -- the case the two were
+    grouped on."""
+    target = tmp_path / "target.bin"
+    target.write_bytes(b"x" * len(target.name))
+    try:
+        os.symlink(target.name, tmp_path / "link.bin")
+    except (OSError, NotImplementedError):
+        pytest.skip("could not create a symlink in this environment")
+
+    root = scan(str(tmp_path), queue.Queue(), threading.Event())
+    duplicates = duplicate_finder.find_duplicate_files(root, skip=lambda path: False)
+
+    grouped = {node.name for _size, _digest, nodes in duplicates for node in nodes}
+    assert "link.bin" not in grouped
+    assert not duplicates
+
