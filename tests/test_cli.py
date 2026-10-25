@@ -2,6 +2,7 @@ import csv
 import io
 import json
 import logging
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -133,6 +134,81 @@ def test_redirected_stdout_stays_pure_json_when_stderr_has_no_handle(tmp_path, m
     assert code == EXIT_OK
     assert json.loads(redirected.getvalue())["file_count"] == 1
     assert "Scanned" in console.getvalue()
+
+
+def test_unreadable_root_directory_fails_instead_of_scanning_as_empty(
+    tmp_path, monkeypatch, capsys
+):
+    # A root that can't be listed (permission denied) doesn't raise: the
+    # scan hands back an empty tree marked as failed. That used to exit 0
+    # and look like an empty folder.
+    from storage_scanner import scanner
+
+    scanned = tmp_path / "scanned"
+    scanned.mkdir()
+    (scanned / "a.txt").write_text("hello")
+
+    real_scandir = os.scandir
+
+    def deny(path):
+        if os.path.abspath(path) == os.path.abspath(scanned):
+            raise PermissionError(13, "Permission denied", str(path))
+        return real_scandir(path)
+
+    monkeypatch.setattr(scanner.os, "scandir", deny)
+
+    code = run_cli([str(scanned)])
+
+    assert code == EXIT_SCAN_ERROR
+    captured = capsys.readouterr()
+    assert "Could not read" in captured.err
+    assert captured.out == ""
+
+
+def test_single_file_target_that_cannot_be_read_fails(tmp_path, monkeypatch, capsys):
+    from storage_scanner import scanner
+    from storage_scanner.models import FLAG_ERROR, detached_file
+
+    target = tmp_path / "gone.txt"
+    target.write_text("hello")
+
+    def unreadable(path):
+        return detached_file(path, flags=FLAG_ERROR)
+
+    monkeypatch.setattr(scanner, "_scan_file", unreadable)
+
+    code = run_cli([str(target)])
+
+    assert code == EXIT_SCAN_ERROR
+    assert "Could not read" in capsys.readouterr().err
+
+
+def test_unreadable_root_is_not_recorded_in_the_scan_history(tmp_path, monkeypatch, capsys):
+    from storage_scanner import history_db, history_queries, scanner
+    from storage_scanner.scan_history import normalize_scan_path
+
+    monkeypatch.setattr(history_db, "DB_NAME", str(tmp_path / "storage_history.db"))
+    history_db.init_history_db()
+    scanned = tmp_path / "scanned"
+    scanned.mkdir()
+    (scanned / "a.txt").write_text("hello")
+
+    real_scandir = os.scandir
+
+    def deny(path):
+        if os.path.abspath(path) == os.path.abspath(scanned):
+            raise PermissionError(13, "Permission denied", str(path))
+        return real_scandir(path)
+
+    monkeypatch.setattr(scanner.os, "scandir", deny)
+
+    code = run_cli([str(scanned), "--save-history", "--format", "none"])
+
+    assert code == EXIT_SCAN_ERROR
+    assert "Could not read" in capsys.readouterr().err
+    # A 0-byte snapshot would read as a "drop" in the anomaly detection
+    # and drag the forecasts down.
+    assert history_queries.get_latest_scan_id(normalize_scan_path(str(scanned))) is None
 
 
 def test_output_to_file(tmp_path, capsys):

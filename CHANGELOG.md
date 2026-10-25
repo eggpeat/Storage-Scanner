@@ -24,6 +24,10 @@ before v1.04 (v1.0.0 to v1.0.3) aren't listed.
 
 ### Fixes
 
+- A `--cli` scan of a folder that can't be read (permission denied, say) now
+  exits with an error instead of reporting an empty folder: it used to exit
+  0 and, with `--save-history`, record a 0-byte scan that then read as a
+  "drop" in the anomaly detection and the forecasts.
 - The treemap no longer leaves part of a large window blank. Past its
   3,000-tile limit it used to stop drawing, so on `C:\Windows` in a
   2,600 × 1,500 window only 7 of 59 top-level items got a tile. It now
