@@ -24,6 +24,11 @@ before v1.04 (v1.0.0 to v1.0.3) aren't listed.
 
 ### Fixes
 
+- `--cli --format csv` no longer dies with a UnicodeEncodeError traceback on
+  file names its output can't encode: names outside the ANSI code page when
+  stdout is redirected on Windows, and names that aren't valid UTF-8 on
+  Linux (for both stdout and `--output FILE`, which could also be left as a
+  partial file).
 - The treemap no longer leaves part of a large window blank. Past its
   3,000-tile limit it used to stop drawing, so on `C:\Windows` in a
   2,600 × 1,500 window only 7 of 59 top-level items got a tile. It now

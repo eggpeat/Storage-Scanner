@@ -97,3 +97,22 @@ def test_csv_has_readable_modified_and_accessed_times():
     assert row["mtime"] == "1700000000.0"  # unchanged for existing scripts
     assert row["modified"].startswith("2023-11-1")
     assert row["accessed"] != "" and row["accessed"] != row["modified"]
+
+
+def test_export_to_file_writes_names_that_arent_valid_utf8(tmp_path):
+    # Linux file names can be arbitrary bytes; the scan returns them
+    # surrogate-escaped. Strict UTF-8 would raise UnicodeEncodeError halfway
+    # through, ending a scheduled run in a traceback over a partial file.
+    # A name whose bytes b"bad-\xc3(.txt" aren't valid UTF-8: the file system
+    # gives it to the scan as "bad-\udcc3(.txt".
+    name = "bad-\udcc3(.txt"
+    root = Node("/data", "data")
+    root.add_file(name, 5)
+    root.size, root.file_count = 5, 1
+
+    export_to_file(root, tmp_path / "out.csv", "csv")
+    export_to_file(root, tmp_path / "out.json", "json")
+
+    # The name's original bytes come back out, not a mojibake re-encoding.
+    assert name.encode("utf-8", errors="surrogateescape") in (tmp_path / "out.csv").read_bytes()
+    assert json.loads((tmp_path / "out.json").read_text(encoding="utf-8"))["size"] == 5
