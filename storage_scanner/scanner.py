@@ -270,8 +270,15 @@ def scan(path, progress_q, cancel_event, workers=None):
                     attrs = getattr(st_info, "st_file_attributes", 0) if st_info is not None else 0
                     is_reparse = bool(attrs & stat.FILE_ATTRIBUTE_REPARSE_POINT)
                     is_placeholder = is_cloud_placeholder_attrs(attrs)
+                    # A POSIX symbolic link carries no reparse-point
+                    # attribute -- only its own lstat mode says it's a
+                    # link. Without this it was recorded as an ordinary
+                    # file, so a symlink and the file it points at could
+                    # be reported as duplicate copies of each other.
+                    is_symlink = st_info is not None and stat.S_ISLNK(st_info.st_mode)
+                    is_link = is_reparse or is_symlink
                     try:
-                        is_dir = entry.is_dir(follow_symlinks=False) and not is_reparse
+                        is_dir = entry.is_dir(follow_symlinks=False) and not is_link
                     except OSError:
                         is_dir = False
 
@@ -295,7 +302,7 @@ def scan(path, progress_q, cancel_event, workers=None):
                         if is_placeholder:
                             flags = FLAG_CLOUD_PLACEHOLDER
                         else:
-                            flags = FLAG_LINK if is_reparse else 0
+                            flags = FLAG_LINK if is_link else 0
                         if st_info is None:
                             node.add_file(entry.name, flags=flags | FLAG_ERROR)
                         else:

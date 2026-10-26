@@ -21,7 +21,7 @@ from storage_scanner.cleanup_recommendations import (
     pick_keeper,
 )
 from storage_scanner.delete_guard import name_is_trimmed_by_windows, windows_trims_path
-from storage_scanner.models import FLAG_CLOUD_PLACEHOLDER, FileNode, iter_file_rows
+from storage_scanner.models import FLAG_CLOUD_PLACEHOLDER, FLAG_LINK, FileNode, iter_file_rows
 from storage_scanner.platform_support import IS_WINDOWS
 from storage_scanner.settings import DUPLICATE_HASH_CHUNK_BYTES
 
@@ -152,8 +152,13 @@ def _collect_candidates(root_node, stats, progress_q, cancel_event, skip):
             # their full logical size but aren't actually on local disk --
             # hashing one would force Windows to download it just to
             # compare it. Skip them entirely.
+            #
+            # Links are skipped too: a symlink's recorded size is its own
+            # (the length of the target path), but hashing it reads
+            # through it to the target, so a link and the file it points
+            # at came out as identical copies of each other.
             if (
-                flags[i] & FLAG_CLOUD_PLACEHOLDER
+                flags[i] & (FLAG_CLOUD_PLACEHOLDER | FLAG_LINK)
                 or (trims and name_is_trimmed_by_windows(names[i]))
                 or skip(node.path)
             ):
