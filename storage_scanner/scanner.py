@@ -2,6 +2,7 @@
 
 import os
 import queue
+import re
 import stat
 import sys
 import threading
@@ -31,6 +32,64 @@ from storage_scanner.scan_progress import (
 PHASE_ADDING_UP = "Adding up folder sizes"
 
 _IS_WINDOWS = sys.platform == "win32"
+
+# mountinfo octal-escapes space, tab, newline and backslash (\040, \011,
+# \012, \134) and writes every other byte raw, so a field can hold bytes
+# that are not UTF-8.
+_MOUNTINFO_ESCAPE = re.compile(rb"\\([0-3][0-7]{2})")
+
+
+def _mountinfo_field(raw):
+    """A /proc/self/mountinfo field as str, decoded like os.scandir names."""
+    return os.fsdecode(_MOUNTINFO_ESCAPE.sub(lambda m: bytes((int(m[1], 8),)), raw))
+
+
+def _pseudo_filesystem_devices():
+    """Linux kernel views are not stored file data, even when selected directly."""
+    devices = set()
+    if not sys.platform.startswith("linux") or _IS_WINDOWS:
+        return devices
+    pseudo_types = {
+        "proc",
+        "sysfs",
+        "devtmpfs",
+        "devpts",
+        "cgroup",
+        "cgroup2",
+        "securityfs",
+        "debugfs",
+        "tracefs",
+        "configfs",
+        "pstore",
+        "fusectl",
+        "mqueue",
+        "hugetlbfs",
+        "rpc_pipefs",
+        "binfmt_misc",
+        "efivarfs",
+    }
+    try:
+        # Bytes, not text: one mount path that isn't UTF-8 must not stop
+        # every scan with a UnicodeDecodeError.
+        with open("/proc/self/mountinfo", "rb") as mounts:
+            for line in mounts:
+                fields, separator, filesystem = line.partition(b" - ")
+                filesystem = filesystem.split()
+                if (
+                    not separator
+                    or not filesystem
+                    or _mountinfo_field(filesystem[0]) not in pseudo_types
+                ):
+                    continue
+                try:
+                    major, minor = map(int, fields.split()[2].split(b":"))
+                    devices.add(os.makedev(major, minor))
+                except (IndexError, ValueError, OverflowError):
+                    continue
+    except OSError:
+        # Device boundaries still protect ordinary scans without procfs.
+        pass
+    return devices
 
 
 def _worker_count():
@@ -90,6 +149,10 @@ def scan(path, progress_q, cancel_event, workers=None):
     risk of pool-starvation deadlock no matter how deep the tree goes.
     Sizes are rolled up afterwards in a fast in-memory pass.
 
+    Stay on the target's device: other mounted filesystems remain empty
+    directory leaves. Linux kernel pseudo-filesystems are excluded even
+    as explicit targets (returning an empty node without progress events).
+
     Posts progress to `progress_q` (see storage_scanner.scan_progress) and
     stops early if `cancel_event` is set: a ("walk", WalkSnapshot) every
     REPORT_INTERVAL_SECONDS from a reporter thread plus one final exact
@@ -112,10 +175,20 @@ def scan(path, progress_q, cancel_event, workers=None):
     tree's numbers are exactly what they'd be without the live totals.
     """
     path = os.path.abspath(path)
-    if not os.path.isdir(path):
+    try:
+        root_stat = os.stat(path)
+    except OSError:
+        return detached_file(path, flags=FLAG_ERROR)
+    root_device = root_stat.st_dev
+    pseudo_devices = _pseudo_filesystem_devices()
+    if not stat.S_ISDIR(root_stat.st_mode):
+        if root_device in pseudo_devices:
+            return detached_file(path)
         return _scan_file(path)
     name = path if path.endswith(os.sep) else os.path.basename(path) or path
     root = Node(path, name)
+    if root_device in pseudo_devices:
+        return root
 
     n = workers or _worker_count()
     tracker = WalkTracker(root, n)
@@ -216,7 +289,10 @@ def scan(path, progress_q, cancel_event, workers=None):
                             child.mtime = st_info.st_mtime
                             child.atime = st_info.st_atime
                         node.dirs.append(child)  # only this worker touches node's children
-                        subdirs.append(child)  # queued by _publish, sized in rollup
+                        if st_info is None:
+                            child.error = True
+                        elif st_info.st_dev == root_device:
+                            subdirs.append(child)  # queued by _publish, sized in rollup
                     else:
                         # A cloud placeholder file can also carry the
                         # reparse-point bit (OneDrive Files On-Demand uses

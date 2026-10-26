@@ -24,6 +24,10 @@ before v1.04 (v1.0.0 to v1.0.3) aren't listed.
 
 ### Fixes
 
+- A `--cli` scan of a folder that can't be read (permission denied, say) now
+  exits with an error instead of reporting an empty folder: it used to exit
+  0 and, with `--save-history`, record a 0-byte scan that then read as a
+  "drop" in the anomaly detection and the forecasts.
 - The treemap no longer leaves part of a large window blank. Past its
   3,000-tile limit it used to stop drawing, so on `C:\Windows` in a
   2,600 × 1,500 window only 7 of 59 top-level items got a tile. It now
@@ -75,6 +79,11 @@ before v1.04 (v1.0.0 to v1.0.3) aren't listed.
   (`requirements-*.lock`): every package those tools pull in is pinned too,
   with the checksum of each file, so a build can only use exactly those
   files. `lock_requirements.py` regenerates the locks.
+- Build and audit tools updated past their published security advisories:
+  Pillow 13.0.0 (was 12.3.0), Black 26.10.1 (was 26.5.1), and the
+  setuptools, certifi and filelock they pull in. CI's dependency audit
+  (`pip-audit`) passes again. Pillow only draws the app icon
+  (`make_icon.py`), which comes out byte-identical; the app never loads it.
 
 ## v1.14.0 — 2026-10-08
 
