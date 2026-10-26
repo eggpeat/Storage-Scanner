@@ -11,7 +11,17 @@ sys.path.insert(0, str(ROOT))
 
 from storage_scanner import history_db, history_queries, history_store
 from storage_scanner.scan_history import normalize_scan_path
+from storage_scanner.ui import growth_history_view
 from storage_scanner.ui.history_window import HistoryMixin
+
+
+def test_missing_folder_snapshots_are_displayed_as_unknown_not_zero():
+    assert growth_history_view._folder_size_text(None) == "Not tracked"
+    assert growth_history_view._folder_growth_text(None) == "Unknown"
+    assert growth_history_view._folder_size_text(0) != "Not tracked"
+    assert growth_history_view._folder_growth_text(0) != "Unknown"
+    assert growth_history_view._change_percent_text(None, None) == "—"
+    assert growth_history_view._change_percent_text(0, None) == "—"
 
 
 class _PathBox:

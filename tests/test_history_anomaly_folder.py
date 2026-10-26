@@ -88,6 +88,20 @@ def test_returns_none_when_only_the_root_folder_is_tracked(monkeypatch):
     assert app._likely_folder_for_anomaly(SCAN_PATH, _drop_anomaly(), created_ats, scan_ids) is None
 
 
+def test_threshold_crossings_are_not_ranked_as_anomaly_causes(monkeypatch):
+    app = _setup(
+        monkeypatch,
+        [
+            ("C:/Example/crossed", None, 55_000_000, None, None, "New / was <50 MB", 10),
+            ("C:/Example/gone", 55_000_000, None, None, None, "Gone / now <50 MB", 0),
+        ],
+    )
+    created_ats, scan_ids = _order_and_ids()
+
+    for anomaly in (_drop_anomaly(), _spike_anomaly()):
+        assert app._likely_folder_for_anomaly(SCAN_PATH, anomaly, created_ats, scan_ids) is None
+
+
 def test_returns_none_when_no_tracked_folder_moved_in_the_anomalys_direction(monkeypatch):
     # A drop anomaly, but every tracked non-root folder actually grew --
     # nothing here honestly explains the drop, so don't guess.

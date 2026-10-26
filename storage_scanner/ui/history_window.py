@@ -199,7 +199,9 @@ class HistoryMixin(AppMixin):
         rows = get_folder_growth(current_id, previous_id, limit=None)
         normalized_root = os.path.normcase(os.path.normpath(scan_path))
         candidates = [
-            row for row in rows if os.path.normcase(os.path.normpath(row[0])) != normalized_root
+            row
+            for row in rows
+            if row[3] is not None and os.path.normcase(os.path.normpath(row[0])) != normalized_root
         ]
         if not candidates:
             return None

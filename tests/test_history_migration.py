@@ -203,9 +203,14 @@ def test_a_version_1_database_is_migrated_with_every_scan_and_folder_row(v1_db, 
     ] * len(scans_before)
     for (current, previous), rows in growth_before.items():
         migrated = history_queries.get_folder_growth(current, previous)
-        # growth_before only knew the current scan's folders; folders only the
-        # previous scan had (current size 0) are listed now too (P2-5).
-        assert [row[:4] + row[6:] for row in migrated if row[2] > 0] == rows
+        # Migration preserves measured deltas; a missing snapshot is now
+        # unknown rather than the zero assumed by the old query.
+        assert [row[:4] + row[6:] for row in migrated if row[3] is not None] == [
+            row for row in rows if row[1] > 0
+        ]
+        assert {row[0] for row in migrated if row[1] is None} == {
+            row[0] for row in rows if row[1] == 0
+        }
     folder_rows = sum(len(folders) for *_scan, folders in SCANS)
     assert _query(v1_db, "SELECT COUNT(*) FROM folder_snapshots") == [(folder_rows,)]
     assert "c:\\orphan" not in {path for (path,) in _query(v1_db, "SELECT path FROM folder_paths")}
@@ -284,11 +289,11 @@ def test_scans_saved_after_migrating_compare_with_migrated_ones(v1_db):
     assert _query(v1_db, "SELECT COUNT(*) FROM folder_paths") == [(paths_before[0] + 1,)]
     rows = history_queries.get_folder_growth(scan_id, 4)
     assert [(row[0], row[1], row[2]) for row in rows] == [
-        ("c:\\data\\brand_new", 0, 440),
         ("c:\\data\\a", 450, 460),
-        ("c:\\data\\newer", 100, 0),
-        ("c:\\data\\new", 250, 0),
-        ("c:\\data\\b", 350, 0),
+        ("c:\\data\\b", 350, None),
+        ("c:\\data\\brand_new", None, 440),
+        ("c:\\data\\new", 250, None),
+        ("c:\\data\\newer", 100, None),
     ]
 
 
