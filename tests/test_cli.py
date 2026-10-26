@@ -117,9 +117,7 @@ def test_csv_output_survives_a_name_that_isnt_valid_utf8(tmp_path, monkeypatch):
     assert bad_bytes in out_file.read_bytes()
 
 
-def test_csv_to_a_redirected_stdout_encodes_names_outside_the_code_page(
-    tmp_path, monkeypatch
-):
+def test_csv_to_a_redirected_stdout_encodes_names_outside_the_code_page(tmp_path, monkeypatch):
     # Windows with stdout redirected (Task Scheduler, `> file`): Python ≤3.14
     # encodes stdout with the ANSI code page, and cp1252 has no "日本語".
     (tmp_path / "日本語.txt").write_text("hello")
@@ -130,7 +128,7 @@ def test_csv_to_a_redirected_stdout_encodes_names_outside_the_code_page(
 
     assert code == EXIT_OK
     pipe.flush()
-    assert "日本語".encode("utf-8") in pipe.buffer.getvalue()
+    assert "日本語".encode() in pipe.buffer.getvalue()
 
 
 def _no_standard_handles(monkeypatch, console=None, stdout=None):
