@@ -278,9 +278,7 @@ def test_unwritable_output_path_returns_scan_error(tmp_path, capsys):
     assert "Could not write output file" in captured.err
 
 
-def test_output_failure_on_a_name_surrogateescape_cannot_encode(
-    tmp_path, monkeypatch, capsys
-):
+def test_output_failure_on_a_name_surrogateescape_cannot_encode(tmp_path, monkeypatch, capsys):
     # surrogateescape writes back only U+DC80..U+DCFF (where invalid UTF-8
     # bytes land). A name can hold other unpaired surrogates — "\ud800"
     # here, as read from an API or share that hands them out — and encoding
