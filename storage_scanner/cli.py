@@ -87,6 +87,19 @@ def run_cli(argv):
         print(f"Scan failed: {exc}", file=sys.stderr)
         return EXIT_SCAN_ERROR
 
+    # A root that couldn't be read at all (permission denied, say) doesn't
+    # raise: scan() hands back an empty tree marked node.error, which used
+    # to look like a successful scan of an empty folder -- exit 0, and a
+    # 0-byte snapshot in the history that then reads as a "drop" in the
+    # anomaly detection and the forecasts. Fail the scan instead, and
+    # don't record it.
+    if node.error and (not node.is_dir or not node.children):
+        print(
+            f"Could not read {args.path}: permission denied or the path is not accessible.",
+            file=sys.stderr,
+        )
+        return EXIT_SCAN_ERROR
+
     # Diagnostics go to stderr so stdout stays clean for the actual data —
     # the same lesson learned from --priv-scan's stdout-pollution bug.
     print(
