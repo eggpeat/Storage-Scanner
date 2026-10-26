@@ -144,7 +144,11 @@ def scenario_history_20k(_n_files, workdir):
         start = time.perf_counter()
         rows = history_queries.get_folder_growth(scan_id, previous_id, limit=50)
         growth_seconds = time.perf_counter() - start
-    assert rows[0][0].startswith(os.path.join(VOLUME_ROOT, "new"))
+    largest_measured = max(
+        (path for path in second if path in first),
+        key=lambda path: second[path]["size"] - first[path]["size"],
+    )
+    assert rows[0][0] == largest_measured
 
     return {
         "history_20k_folder_rows": len(second),

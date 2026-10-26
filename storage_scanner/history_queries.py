@@ -91,11 +91,10 @@ def list_scans_for_path(scan_path, limit=200):
 
 def get_folder_growth(current_scan_id, previous_scan_id, limit=50):
     """The `limit` folders (None: all) that grew the most (shrinking ones
-    last), each against the same folder in the other scan. Only folders of
-    MIN_FOLDER_SIZE_FOR_HISTORY or more are kept, so a folder only one scan
-    has either appeared or disappeared, or crossed that size: it's counted
-    against 0, and its growth_percent is None. Equal growth is ordered by
-    path."""
+    last), each against the same folder in the other scan. Missing snapshots
+    may mean a folder crossed MIN_FOLDER_SIZE_FOR_HISTORY, not that it was
+    created or deleted. Their missing size and growth are None, and they sort
+    after measured changes. Equal growth is ordered by path."""
     conn = connect()
     cur = conn.cursor()
 
@@ -104,9 +103,9 @@ def get_folder_growth(current_scan_id, previous_scan_id, limit=50):
         SELECT path, previous_size, current_size, growth_bytes, file_count FROM (
             SELECT
                 p.path AS path,
-                COALESCE(prev.size_bytes, 0) AS previous_size,
+                prev.size_bytes AS previous_size,
                 curr.size_bytes AS current_size,
-                curr.size_bytes - COALESCE(prev.size_bytes, 0) AS growth_bytes,
+                curr.size_bytes - prev.size_bytes AS growth_bytes,
                 curr.file_count AS file_count
             FROM folder_snapshots curr
             JOIN folder_paths p ON p.id = curr.path_id
@@ -115,7 +114,7 @@ def get_folder_growth(current_scan_id, previous_scan_id, limit=50):
                AND prev.path_id = curr.path_id
             WHERE curr.scan_id = ?
             UNION ALL
-            SELECT p.path, prev.size_bytes, 0, -prev.size_bytes, 0
+            SELECT p.path, prev.size_bytes, NULL, NULL, 0
             FROM folder_snapshots prev
             JOIN folder_paths p ON p.id = prev.path_id
             WHERE prev.scan_id = ?
@@ -142,12 +141,16 @@ def get_folder_growth(current_scan_id, previous_scan_id, limit=50):
     for row in rows:
         folder_path, previous_size, current_size, growth_bytes, file_count = row
 
-        if previous_size > 0 and current_size > 0:
+        if previous_size is not None and previous_size > 0 and current_size is not None:
             growth_percent = ((current_size - previous_size) / previous_size) * 100
         else:
             growth_percent = None
 
-        if growth_bytes > 0:
+        if previous_size is None:
+            growth_type = "New / was <50 MB"
+        elif current_size is None:
+            growth_type = "Gone / now <50 MB"
+        elif growth_bytes > 0:
             growth_type = "Growing"
         elif growth_bytes < 0:
             growth_type = "Shrinking"
@@ -207,7 +210,7 @@ def get_growth_summary(current_scan_id, previous_scan_id):
             "file_count_change": None,
             "file_count_change_percent": None,
             "tracked_folders": 0,
-            "new_folders": 0,
+            "newly_tracked_folders": 0,
             "largest_growth_folder": None,
             "largest_shrink_folder": None,
         }
@@ -226,20 +229,21 @@ def get_growth_summary(current_scan_id, previous_scan_id):
         file_count_change_percent = (file_count_change / previous_files) * 100
 
     growth_rows = get_folder_growth(current_scan_id, previous_scan_id, limit=None)
-    tracked_folders = sum(1 for row in growth_rows if row[2] > 0)
-    new_folders = sum(1 for row in growth_rows if row[1] == 0 and row[2] > 0)
+    tracked_folders = sum(1 for row in growth_rows if row[2] is not None)
+    newly_tracked_folders = sum(1 for row in growth_rows if row[1] is None)
+    measured_rows = [row for row in growth_rows if row[3] is not None]
 
     largest_growth_folder = None
-    if any(row[3] > 0 for row in growth_rows):
+    if any(row[3] > 0 for row in measured_rows):
         largest_growth_folder = max(
-            (row for row in growth_rows if row[3] > 0),
+            (row for row in measured_rows if row[3] > 0),
             key=lambda row: row[3],
         )
 
     largest_shrink_folder = None
-    if any(row[3] < 0 for row in growth_rows):
+    if any(row[3] < 0 for row in measured_rows):
         largest_shrink_folder = max(
-            (row for row in growth_rows if row[3] < 0),
+            (row for row in measured_rows if row[3] < 0),
             key=lambda row: abs(row[3]),
         )
 
@@ -253,7 +257,7 @@ def get_growth_summary(current_scan_id, previous_scan_id):
         "file_count_change": file_count_change,
         "file_count_change_percent": file_count_change_percent,
         "tracked_folders": tracked_folders,
-        "new_folders": new_folders,
+        "newly_tracked_folders": newly_tracked_folders,
         "largest_growth_folder": largest_growth_folder,
         "largest_shrink_folder": largest_shrink_folder,
     }

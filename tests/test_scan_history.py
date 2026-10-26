@@ -3,6 +3,8 @@ import shutil
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
@@ -61,6 +63,31 @@ def test_second_scan_of_the_same_path_reports_growth_against_the_first(tmp_path,
 
     assert second.previous_scan_id == first.scan_id
     assert second.growth_rows
+
+
+@pytest.mark.parametrize("sizes", [(45, 55), (55, 45)])
+def test_threshold_crossing_does_not_report_exact_growth(tmp_path, monkeypatch, sizes):
+    _db(tmp_path, monkeypatch)
+    path = str(tmp_path)
+    first = scan_history.record_scan(_tree(path, big_size=60 * MB, small_size=sizes[0] * MB))
+    second = scan_history.record_scan(_tree(path, big_size=80 * MB, small_size=sizes[1] * MB))
+
+    for current, previous in ((second, first), (first, second)):
+        rows = history_queries.get_folder_growth(current.scan_id, previous.scan_id, limit=None)
+        crossing = next(row for row in rows if row[0] == os.path.join(path, "small"))
+        assert crossing[3:5] == (None, None)
+        assert crossing[5] in ("New / was <50 MB", "Gone / now <50 MB")
+        assert (crossing[1] is None) != (crossing[2] is None)
+        assert rows[-1] == crossing
+        assert history_queries.get_folder_growth(current.scan_id, previous.scan_id, limit=1) == [
+            rows[0]
+        ]
+        measured = next(row for row in rows if row[0] == os.path.join(path, "big"))
+        assert abs(measured[3]) == 20 * MB
+        summary = history_queries.get_growth_summary(current.scan_id, previous.scan_id)
+        assert summary["newly_tracked_folders"] == int(crossing[1] is None)
+        assert summary["largest_growth_folder"] != crossing
+        assert summary["largest_shrink_folder"] != crossing
 
 
 def test_record_scan_reports_a_budget_breach(tmp_path, monkeypatch):

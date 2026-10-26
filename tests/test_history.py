@@ -380,19 +380,33 @@ def test_folder_growth_between_two_scans(tmp_path, monkeypatch):
 
     rows = history_queries.get_folder_growth(newer, older)
 
-    # Largest growth first; a folder only the older scan had comes last,
-    # counted against 0 (it's gone, or now under the 50 MB history keeps).
+    # Measured growth first; missing snapshots are unknown, not zero.
     assert rows == [
-        ("C:/Example/new", 0, 500, 500, None, "Growing", 7),
         ("C:/Example/grew", 100, 150, 50, 50.0, "Growing", 7),
         ("C:/Example/same", 200, 200, 0, 0.0, "Unchanged", 7),
         ("C:/Example/shrank", 400, 300, -100, -25.0, "Shrinking", 7),
-        ("C:/Example/gone", 999, 0, -999, None, "Shrinking", 0),
+        ("C:/Example/gone", 999, None, None, None, "Gone / now <50 MB", 0),
+        ("C:/Example/new", None, 500, None, None, "New / was <50 MB", 7),
     ]
     summary = history_queries.get_growth_summary(newer, older)
-    assert (summary["tracked_folders"], summary["new_folders"]) == (4, 1)
-    assert summary["largest_growth_folder"][0] == "C:/Example/new"
-    assert summary["largest_shrink_folder"][0] == "C:/Example/gone"
+    assert (summary["tracked_folders"], summary["newly_tracked_folders"]) == (4, 1)
+    assert summary["largest_growth_folder"][0] == "C:/Example/grew"
+    assert summary["largest_shrink_folder"][0] == "C:/Example/shrank"
+
+
+def test_missing_snapshots_are_distinct_from_recorded_zero_sizes(tmp_path, monkeypatch):
+    monkeypatch.setattr(history_db, "DB_NAME", str(tmp_path / "storage_history.db"))
+    history_db.init_history_db()
+    older = _save({"C:/Example/empty": 0, "C:/Example/emptied": 100})
+    newer = _save({"C:/Example/empty": 100, "C:/Example/emptied": 0})
+
+    assert history_queries.get_folder_growth(newer, older) == [
+        ("C:/Example/empty", 0, 100, 100, None, "Growing", 7),
+        ("C:/Example/emptied", 100, 0, -100, -100.0, "Shrinking", 7),
+    ]
+    summary = history_queries.get_growth_summary(newer, older)
+    assert summary["newly_tracked_folders"] == 0
+    assert summary["tracked_folders"] == 2
 
 
 def test_the_growth_summary_counts_every_folder_not_just_the_top_50(tmp_path, monkeypatch):

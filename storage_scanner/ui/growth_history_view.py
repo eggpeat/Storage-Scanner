@@ -39,12 +39,18 @@ _STATUS_TAGS = {"Growing": "growing", "Shrinking": "shrinking"}
 
 
 def _change_percent_text(previous_size, growth_percent):
-    """A folder's change as a percentage, or for one only a single scan has
-    (history keeps folders of 50 MB or more), which way it went: it may have
-    appeared or gone, or only crossed 50 MB."""
+    """A measured percentage, or unknown when there is no usable baseline."""
     if growth_percent is not None:
         return f"{growth_percent:.1f}%"
-    return "New / was <50 MB" if previous_size == 0 else "Gone / now <50 MB"
+    return "—"
+
+
+def _folder_size_text(size):
+    return "Not tracked" if size is None else human_size(size)
+
+
+def _folder_growth_text(growth_bytes):
+    return "Unknown" if growth_bytes is None else human_size(growth_bytes)
 
 
 def _format_change(value, is_bytes=True):
@@ -74,8 +80,8 @@ def _summarize_folder_change(row):
         growth_type,
         file_count,
     ) = row
-    percent_text = "new" if growth_percent is None else f"{growth_percent:.1f}%"
-    return f"{os.path.basename(folder_path)} — {human_size(growth_bytes)} ({percent_text})"
+    percent_text = _change_percent_text(previous_size, growth_percent)
+    return f"{os.path.basename(folder_path)} — {_folder_growth_text(growth_bytes)} ({percent_text})"
 
 
 class GrowthHistoryWindow:
@@ -318,7 +324,7 @@ class GrowthHistoryWindow:
                 _format_change(summary["file_count_change"], is_bytes=False),
             ),
             ("Tracked folders", f"{summary['tracked_folders']:,}"),
-            ("New folders (or newly over 50 MB)", f"{summary['new_folders']:,}"),
+            ("Newly tracked (new or crossed 50 MB)", f"{summary['newly_tracked_folders']:,}"),
             (
                 "Largest growth folder",
                 _summarize_folder_change(summary["largest_growth_folder"]),
@@ -350,7 +356,7 @@ class GrowthHistoryWindow:
         change_tv.heading("status", text="Status")
         change_tv.column("folder", width=px(420), anchor=W, stretch=True)
         change_tv.column("change", width=px(140), anchor=E, stretch=False)
-        change_tv.column("status", width=px(100), anchor=W, stretch=False)
+        change_tv.column("status", width=px(160), anchor=W, stretch=False)
 
         change_tv.pack(fill=BOTH, expand=True)
         change_tv.tag_configure("even", background=COLORS["panel"])
@@ -384,7 +390,7 @@ class GrowthHistoryWindow:
                 END,
                 values=(
                     folder_path,
-                    f"{human_size(growth_bytes)} "
+                    f"{_folder_growth_text(growth_bytes)} "
                     f"({_change_percent_text(previous_size, growth_percent)})",
                     growth_type,
                 ),
@@ -411,7 +417,7 @@ class GrowthHistoryWindow:
         tv.column("current", width=px(100), anchor=E, stretch=False)
         tv.column("growth", width=px(100), anchor=E, stretch=False)
         tv.column("percent", width=px(90), anchor=E, stretch=False)
-        tv.column("status", width=px(90), anchor=W, stretch=False)
+        tv.column("status", width=px(160), anchor=W, stretch=False)
         tv.column("files", width=px(80), anchor=E, stretch=False)
 
         vsb = ttk.Scrollbar(details_frame_content, orient="vertical", command=tv.yview)
@@ -460,9 +466,9 @@ class GrowthHistoryWindow:
                 END,
                 values=(
                     folder_path,
-                    human_size(previous_size),
-                    human_size(current_size),
-                    human_size(growth_bytes),
+                    _folder_size_text(previous_size),
+                    _folder_size_text(current_size),
+                    _folder_growth_text(growth_bytes),
                     percent_text,
                     growth_type,
                     f"{file_count:,}",
