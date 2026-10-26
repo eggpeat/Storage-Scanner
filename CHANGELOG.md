@@ -74,6 +74,11 @@ before v1.04 (v1.0.0 to v1.0.3) aren't listed.
   (`requirements-*.lock`): every package those tools pull in is pinned too,
   with the checksum of each file, so a build can only use exactly those
   files. `lock_requirements.py` regenerates the locks.
+- Build and audit tools updated past their published security advisories:
+  Pillow 13.0.0 (was 12.3.0), Black 26.10.1 (was 26.5.1), and the
+  setuptools, certifi and filelock they pull in. CI's dependency audit
+  (`pip-audit`) passes again. Pillow only draws the app icon
+  (`make_icon.py`), which comes out byte-identical; the app never loads it.
 
 ## v1.14.0 — 2026-10-08
 
