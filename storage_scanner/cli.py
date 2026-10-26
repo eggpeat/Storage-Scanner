@@ -151,15 +151,20 @@ def run_cli(argv):
     if args.output:
         try:
             export_to_file(node, args.output, args.format)
-        except OSError as exc:
+        except (OSError, UnicodeError) as exc:
             print(f"Could not write output file: {exc}", file=sys.stderr)
             return EXIT_SCAN_ERROR
     else:
         if args.format == "csv" and hasattr(sys.stdout, "reconfigure"):
             # csv ends each row with \r\n itself; a text-mode stdout on
             # Windows turns that \n into \r\n again, and a CSV reader counts
-            # every resulting \r\r\n as an extra, empty row.
-            sys.stdout.reconfigure(newline="")
+            # every resulting \r\r\n as an extra, empty row (newline="").
+            # encoding="utf-8": a redirected stdout on Windows uses the ANSI
+            # code page, which names outside it (e.g. "日本語") can't encode.
+            # errors="surrogateescape": a Linux name that isn't valid UTF-8
+            # arrives surrogate-escaped; strict errors would raise
+            # UnicodeEncodeError mid-output instead of writing its bytes back.
+            sys.stdout.reconfigure(encoding="utf-8", errors="surrogateescape", newline="")
         write = write_json if args.format == "json" else write_csv
         write(node, sys.stdout)
 

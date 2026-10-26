@@ -28,6 +28,14 @@ before v1.04 (v1.0.0 to v1.0.3) aren't listed.
   exits with an error instead of reporting an empty folder: it used to exit
   0 and, with `--save-history`, record a 0-byte scan that then read as a
   "drop" in the anomaly detection and the forecasts.
+- `--cli --format csv` no longer dies with a UnicodeEncodeError traceback on
+  file names its output can't encode: names outside the ANSI code page when
+  stdout is redirected on Windows, and names that aren't valid UTF-8 on
+  Linux (for both stdout and `--output FILE`, which could also be left as a
+  partial file). One behaviour change to know about: CSV written to stdout
+  is now always UTF-8. On Windows a redirected stdout (Task Scheduler,
+  `> file`) used to write it in the ANSI code page, so a script or an Excel
+  import that reads that output as cp1252 has to read it as UTF-8 instead.
 - The treemap no longer leaves part of a large window blank. Past its
   3,000-tile limit it used to stop drawing, so on `C:\Windows` in a
   2,600 × 1,500 window only 7 of 59 top-level items got a tile. It now

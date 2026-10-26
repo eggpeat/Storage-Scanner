@@ -86,5 +86,9 @@ def export_to_file(node, path, fmt):
     write = write_json if fmt == "json" else write_csv
     newline = "" if fmt == "csv" else None
 
-    with open(path, "w", newline=newline, encoding="utf-8") as f:
+    # errors="surrogateescape": on Linux a file whose name isn't valid UTF-8
+    # arrives surrogate-escaped, and strict UTF-8 would raise
+    # UnicodeEncodeError halfway through the file, leaving it partial.
+    # Writing the surrogates back reproduces the original name bytes.
+    with open(path, "w", newline=newline, encoding="utf-8", errors="surrogateescape") as f:
         write(node, f)

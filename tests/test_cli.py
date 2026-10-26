@@ -89,6 +89,48 @@ def test_csv_on_a_real_stdout_pipe_ends_each_row_once(tmp_path):
     assert len(rows) == 5  # header, the folder, a.txt, sub, sub/b.txt
 
 
+@pytest.mark.skipif(sys.platform != "linux", reason="needs a file system with byte names")
+def test_csv_output_survives_a_name_that_isnt_valid_utf8(tmp_path, monkeypatch):
+    # POSIX file names are bytes; a name that isn't valid UTF-8 reaches the
+    # CSV writer surrogate-escaped. Strict errors raised UnicodeEncodeError
+    # mid-output: a traceback to a redirected stdout, or a partial --output
+    # file with a failing exit code (and history already saved by --save).
+    bad_bytes = b"bad-\xc3\x28.txt"  # invalid UTF-8: \xc3 not followed by a continuation byte
+    fd = os.open(os.path.join(os.fsencode(tmp_path), bad_bytes), os.O_CREAT | os.O_WRONLY)
+    os.close(fd)
+
+    # A redirected stdout on Linux: strict UTF-8 text over a byte pipe.
+    pipe = io.TextIOWrapper(io.BytesIO(), encoding="utf-8")
+    monkeypatch.setattr(sys, "stdout", pipe)
+
+    code = run_cli([str(tmp_path), "--format", "csv"])
+
+    assert code == EXIT_OK
+    pipe.flush()
+    # The name's original bytes come back out, not a mojibake re-encoding.
+    assert bad_bytes in pipe.buffer.getvalue()
+
+    out_file = tmp_path / "out.csv"
+    code = run_cli([str(tmp_path), "--format", "csv", "--output", str(out_file)])
+
+    assert code == EXIT_OK
+    assert bad_bytes in out_file.read_bytes()
+
+
+def test_csv_to_a_redirected_stdout_encodes_names_outside_the_code_page(tmp_path, monkeypatch):
+    # Windows with stdout redirected (Task Scheduler, `> file`): Python ≤3.14
+    # encodes stdout with the ANSI code page, and cp1252 has no "日本語".
+    (tmp_path / "日本語.txt").write_text("hello")
+    pipe = io.TextIOWrapper(io.BytesIO(), encoding="cp1252")
+    monkeypatch.setattr(sys, "stdout", pipe)
+
+    code = run_cli([str(tmp_path), "--format", "csv"])
+
+    assert code == EXIT_OK
+    pipe.flush()
+    assert "日本語".encode() in pipe.buffer.getvalue()
+
+
 def _no_standard_handles(monkeypatch, console=None, stdout=None):
     """What a windowed exe gets: no stdout/stderr unless the caller
     redirected them, and `console` as the starting shell's console."""
@@ -234,6 +276,30 @@ def test_unwritable_output_path_returns_scan_error(tmp_path, capsys):
     assert code == EXIT_SCAN_ERROR
     captured = capsys.readouterr()
     assert "Could not write output file" in captured.err
+
+
+def test_output_failure_on_a_name_surrogateescape_cannot_encode(tmp_path, monkeypatch, capsys):
+    # surrogateescape writes back only U+DC80..U+DCFF (where invalid UTF-8
+    # bytes land). A name can hold other unpaired surrogates — "\ud800"
+    # here, as read from an API or share that hands them out — and encoding
+    # one raises UnicodeEncodeError, which isn't an OSError: it used to end
+    # the run in a traceback over a partial --output file.
+    from storage_scanner import cli
+    from storage_scanner.models import Node
+
+    root = Node(str(tmp_path), tmp_path.name)
+    root.add_file("bad-\ud800.txt", 5)
+    root.size, root.file_count = 5, 1
+
+    monkeypatch.setattr(cli, "scan", lambda path, progress_q, cancel_event: root)
+
+    out_file = tmp_path / "out.csv"
+    code = run_cli([str(tmp_path), "--format", "csv", "--output", str(out_file)])
+
+    assert code == EXIT_SCAN_ERROR
+    captured = capsys.readouterr()
+    assert "Could not write output file" in captured.err
+    assert "Traceback" not in captured.err
 
 
 def test_format_none_writes_no_data(tmp_path, capsys):
