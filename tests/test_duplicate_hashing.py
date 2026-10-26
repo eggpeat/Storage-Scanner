@@ -152,4 +152,3 @@ def test_symlinks_are_not_grouped_as_duplicates_of_their_target(tmp_path):
     grouped = {node.name for _size, _digest, nodes in duplicates for node in nodes}
     assert "link.bin" not in grouped
     assert not duplicates
-
