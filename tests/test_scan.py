@@ -2,7 +2,6 @@ import os
 import queue
 import sys
 import threading
-from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -41,6 +40,18 @@ def _by_name(node):
 
 def _file(parent, name, size=0, **kw):
     return FileNode(parent, parent.add_file(name, size, **kw))
+
+
+def _use_mountinfo(monkeypatch, tmp_path_factory, content):
+    # A real file of raw bytes, as the kernel writes it: only space, tab,
+    # newline and backslash are octal-escaped, every other path byte (0xff
+    # too) is raw. Opened with whatever mode and encoding scanner asks for.
+    mountinfo = tmp_path_factory.mktemp("proc") / "mountinfo"
+    mountinfo.write_bytes(content)
+    real_open = open
+    monkeypatch.setattr(
+        scanner, "open", lambda _path, *args, **kw: real_open(mountinfo, *args, **kw), raising=False
+    )
 
 
 def test_mount_boundaries_are_empty_leaves_but_can_be_scanned_directly(tmp_path, monkeypatch):
@@ -104,17 +115,20 @@ def test_mount_boundaries_are_empty_leaves_but_can_be_scanned_directly(tmp_path,
 
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Linux mountinfo")
 @pytest.mark.parametrize("filesystem", ["proc", "sysfs", "devtmpfs", "devpts", "cgroup2"])
-def test_pseudo_filesystem_targets_are_not_scanned(tmp_path, monkeypatch, filesystem):
+def test_pseudo_filesystem_targets_are_not_scanned(
+    tmp_path, tmp_path_factory, monkeypatch, filesystem
+):
     target = tmp_path / "kernel-view"
     target.mkdir()
     kernel_file = target / "kcore"
     kernel_file.write_bytes(b"not stored file data")
     device = target.stat().st_dev
-    mountinfo = (
+    _use_mountinfo(
+        monkeypatch,
+        tmp_path_factory,
         f"24 1 {os.major(device)}:{os.minor(device)} / /arbitrary\\040mount rw shared:1"
-        f" - {filesystem} none rw\n"
+        f" - {filesystem} none rw\n".encode(),
     )
-    monkeypatch.setattr(scanner, "open", lambda *args, **kw: StringIO(mountinfo), raising=False)
 
     visited = []
     real_scandir = os.scandir
@@ -134,22 +148,46 @@ def test_pseudo_filesystem_targets_are_not_scanned(tmp_path, monkeypatch, filesy
 
 
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Linux mountinfo")
-def test_mountinfo_filters_types_and_tolerates_unavailable_metadata(tmp_path, monkeypatch):
-    mountinfo = (
-        "24 1 0:42 / /renamed\\040proc rw shared:1 - proc none rw\n"
-        "25 1 8:1 / / rw - ext4 /dev/root rw\n"
-        "26 1 0:43 / /ram rw - tmpfs tmpfs rw\n"
-        "invalid mountinfo\n"
-        "27 1 bad / /bad rw - proc none rw\n"
-        "28 1 0:44 / /bad rw - \n"
+def test_mountinfo_filters_types_and_tolerates_unavailable_metadata(
+    tmp_path, tmp_path_factory, monkeypatch
+):
+    _use_mountinfo(
+        monkeypatch,
+        tmp_path_factory,
+        b"24 1 0:42 / /renamed\\040proc rw shared:1 - proc none rw\n"
+        b"25 1 8:1 / / rw - ext4 /dev/root rw\n"
+        b"26 1 0:43 / /ram rw - tmpfs tmpfs rw\n"
+        b"invalid mountinfo\n"
+        b"27 1 bad / /bad rw - proc none rw\n"
+        b"28 1 0:44 / /bad rw - \n",
     )
-    monkeypatch.setattr(scanner, "open", lambda *args, **kw: StringIO(mountinfo), raising=False)
     assert scanner._pseudo_filesystem_devices() == {os.makedev(0, 42)}
 
     def unavailable(*args, **kwargs):
         raise FileNotFoundError
 
     monkeypatch.setattr(scanner, "open", unavailable)
+    (tmp_path / "regular.bin").write_bytes(b"123")
+    assert _run_scan(tmp_path).size == 3
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Linux mountinfo")
+def test_mountinfo_with_non_utf8_mount_paths_does_not_stop_scans(
+    tmp_path, tmp_path_factory, monkeypatch
+):
+    _use_mountinfo(
+        monkeypatch,
+        tmp_path_factory,
+        b"24 1 0:42 / /media/caf\xe9\\040disk rw shared:1 - proc none rw\n"
+        b"25 1 8:1 / /mnt/\xff rw - ext4 /dev/disk/by-label/\xff rw\n"
+        b"26 1 0:43 / /sys\\134\xfe rw - sysfs sysfs rw\n",
+    )
+    assert scanner._pseudo_filesystem_devices() == {os.makedev(0, 42), os.makedev(0, 43)}
+    # Fields decode the way os.scandir decodes names, so they map back to
+    # the exact path bytes, escapes included.
+    decoded = scanner._mountinfo_field(b"/media/caf\xe9\\040disk\\134\\011\xff")
+    assert os.fsencode(decoded) == b"/media/caf\xe9 disk\\\t\xff"
+
     (tmp_path / "regular.bin").write_bytes(b"123")
     assert _run_scan(tmp_path).size == 3
 

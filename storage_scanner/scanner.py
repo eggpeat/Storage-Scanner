@@ -2,6 +2,7 @@
 
 import os
 import queue
+import re
 import stat
 import sys
 import threading
@@ -32,6 +33,16 @@ PHASE_ADDING_UP = "Adding up folder sizes"
 
 _IS_WINDOWS = sys.platform == "win32"
 
+# mountinfo octal-escapes space, tab, newline and backslash (\040, \011,
+# \012, \134) and writes every other byte raw, so a field can hold bytes
+# that are not UTF-8.
+_MOUNTINFO_ESCAPE = re.compile(rb"\\([0-3][0-7]{2})")
+
+
+def _mountinfo_field(raw):
+    """A /proc/self/mountinfo field as str, decoded like os.scandir names."""
+    return os.fsdecode(_MOUNTINFO_ESCAPE.sub(lambda m: bytes((int(m[1], 8),)), raw))
+
 
 def _pseudo_filesystem_devices():
     """Linux kernel views are not stored file data, even when selected directly."""
@@ -58,14 +69,20 @@ def _pseudo_filesystem_devices():
         "efivarfs",
     }
     try:
-        with open("/proc/self/mountinfo", encoding="utf-8") as mounts:
+        # Bytes, not text: one mount path that isn't UTF-8 must not stop
+        # every scan with a UnicodeDecodeError.
+        with open("/proc/self/mountinfo", "rb") as mounts:
             for line in mounts:
-                fields, separator, filesystem = line.partition(" - ")
+                fields, separator, filesystem = line.partition(b" - ")
                 filesystem = filesystem.split()
-                if not separator or not filesystem or filesystem[0] not in pseudo_types:
+                if (
+                    not separator
+                    or not filesystem
+                    or _mountinfo_field(filesystem[0]) not in pseudo_types
+                ):
                     continue
                 try:
-                    major, minor = map(int, fields.split()[2].split(":"))
+                    major, minor = map(int, fields.split()[2].split(b":"))
                     devices.add(os.makedev(major, minor))
                 except (IndexError, ValueError, OverflowError):
                     continue
