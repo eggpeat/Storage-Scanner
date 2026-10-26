@@ -278,6 +278,32 @@ def test_unwritable_output_path_returns_scan_error(tmp_path, capsys):
     assert "Could not write output file" in captured.err
 
 
+def test_output_failure_on_a_name_surrogateescape_cannot_encode(
+    tmp_path, monkeypatch, capsys
+):
+    # surrogateescape writes back only U+DC80..U+DCFF (where invalid UTF-8
+    # bytes land). A name can hold other unpaired surrogates — "\ud800"
+    # here, as read from an API or share that hands them out — and encoding
+    # one raises UnicodeEncodeError, which isn't an OSError: it used to end
+    # the run in a traceback over a partial --output file.
+    from storage_scanner import cli
+    from storage_scanner.models import Node
+
+    root = Node(str(tmp_path), tmp_path.name)
+    root.add_file("bad-\ud800.txt", 5)
+    root.size, root.file_count = 5, 1
+
+    monkeypatch.setattr(cli, "scan", lambda path, progress_q, cancel_event: root)
+
+    out_file = tmp_path / "out.csv"
+    code = run_cli([str(tmp_path), "--format", "csv", "--output", str(out_file)])
+
+    assert code == EXIT_SCAN_ERROR
+    captured = capsys.readouterr()
+    assert "Could not write output file" in captured.err
+    assert "Traceback" not in captured.err
+
+
 def test_format_none_writes_no_data(tmp_path, capsys):
     (tmp_path / "a.txt").write_text("hello")
 
